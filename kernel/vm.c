@@ -80,6 +80,35 @@ getvictim()
   return result;
 }
 
+// Returns free page
+void*
+swapout(pte_t *pte)
+{
+  int blkn = (int)( ((uint64)pte) >> 12 );
+  uchar *data = (uchar*)( ((*pte) << 10) >> 20 );
+  write_block(blkn, data, 0);
+
+  *pte &= ~PTE_V; // V = 0
+  *pte |= PTE_ON_DISK; // ON_DISK = 1
+
+  sfence_vma(); // Flush TLB
+
+  return (void*)data;
+}
+
+void
+swapin(pte_t *pte)
+{
+  int blkn = (int)( ((uint64)pte) >> 12 );
+  uchar *data = kalloc();
+  read_block(blkn, data, 0);
+
+  *pte |= PTE_V; // V = 1
+  *pte &= ~PTE_ON_DISK; // ON_DISK = 0
+
+  sfence_vma(); // Flush TLB
+}
+
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
@@ -159,6 +188,10 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
+    }
+    else if(*pte & PTE_ON_DISK) {
+      swapin(pte);
+      pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
@@ -184,6 +217,8 @@ walkaddr(pagetable_t pagetable, uint64 va)
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
+  if((*pte & PTE_V) == 0 && (*pte & PTE_ON_DISK) != 0)
+    swapin(pte);
   if((*pte & PTE_V) == 0)
     return 0;
   if((*pte & PTE_U) == 0)
