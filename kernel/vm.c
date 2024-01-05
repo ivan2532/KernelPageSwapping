@@ -51,7 +51,10 @@ updaterefhistory()
   for(i = 0; i < LRUPAGESSIZE; i++)
   {
     if(lrupages[i].pte == 0) continue;
+
     uchar a = ( *(lrupages[i].pte) & PTE_A ) == 0 ? 0 : 1;
+    *(lrupages[i].pte) = (*lrupages[i].pte) & (~PTE_A);
+
     uchar mask = a << (sizeof(uchar) * 8 - 1);
     lrupages[i].refbits = (lrupages[i].refbits >> 1) | mask;
   }
