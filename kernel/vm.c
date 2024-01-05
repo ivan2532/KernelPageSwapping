@@ -16,7 +16,7 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 extern char trampoline[]; // trampoline.S
 
 struct lrupinfo {
-  uchar refbits;
+  uchar refhistory;
   pte_t *pte;
 };
 
@@ -33,7 +33,7 @@ void
 reglrupage(pte_t *pte)
 {
   uint64 i = getlruindex(pte);
-  lrupages[i].refbits = (uchar)0;
+  lrupages[i].refhistory = (uchar)0;
   lrupages[i].pte = pte;
 }
 
@@ -56,8 +56,28 @@ updaterefhistory()
     *(lrupages[i].pte) = (*lrupages[i].pte) & (~PTE_A);
 
     uchar mask = a << (sizeof(uchar) * 8 - 1);
-    lrupages[i].refbits = (lrupages[i].refbits >> 1) | mask;
+    lrupages[i].refhistory = (lrupages[i].refhistory >> 1) | mask;
   }
+}
+
+pte_t*
+getvictim()
+{
+  uint64 i;
+  uchar minhistory = ~0;
+  pte_t *result = 0;
+
+  for(i = 0; i < LRUPAGESSIZE; i++)
+  {
+    if(lrupages[i].pte == 0) continue;
+    if(lrupages[i].refhistory < minhistory)
+    {
+      result = lrupages[i].pte;
+      minhistory = lrupages[i].refhistory;
+    }
+  }
+
+  return result;
 }
 
 // Make a direct-map page table for the kernel.
