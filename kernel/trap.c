@@ -6,6 +6,8 @@
 #include "proc.h"
 #include "defs.h"
 
+#define LRUINTERVAL 100
+
 struct spinlock tickslock;
 uint ticks;
 
@@ -13,6 +15,7 @@ extern char trampoline[], uservec[], userret[];
 
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
+void updaterefhistory();
 
 extern int devintr();
 
@@ -165,6 +168,12 @@ clockintr()
 {
   acquire(&tickslock);
   ticks++;
+
+  if(ticks % LRUINTERVAL == 0)
+  {
+    updaterefhistory();
+  }
+
   wakeup(&ticks);
   release(&tickslock);
 }

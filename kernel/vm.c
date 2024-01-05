@@ -16,11 +16,46 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 extern char trampoline[]; // trampoline.S
 
 struct lrupinfo {
-  char refbits;
+  uchar refbits;
   pte_t *pte;
 };
 
-static struct lrupinfo lrupages[(PHYSTOP - KERNBASE) / PGSIZE] = {{0}};
+#define LRUPAGESSIZE ((PHYSTOP - KERNBASE) / PGSIZE)
+static struct lrupinfo lrupages[LRUPAGESSIZE] = {{0}};
+
+uint64
+getlruindex(pte_t *pte)
+{
+  return ( ((uint64)pte) >> 12 ) - ( KERNBASE >> 12 );
+}
+
+void
+reglrupage(pte_t *pte)
+{
+  uint64 i = getlruindex(pte);
+  lrupages[i].refbits = (uchar)0;
+  lrupages[i].pte = pte;
+}
+
+void
+unreglrupage(pte_t *pte)
+{
+  uint64 i = getlruindex(pte);
+  lrupages[i].pte = 0;
+}
+
+void
+updaterefhistory()
+{
+  uint64 i;
+  for(i = 0; i < LRUPAGESSIZE; i++)
+  {
+    if(lrupages[i].pte == 0) continue;
+    uchar a = ( *(lrupages[i].pte) & PTE_A ) == 0 ? 0 : 1;
+    uchar mask = a << (sizeof(uchar) * 8 - 1);
+    lrupages[i].refbits = (lrupages[i].refbits >> 1) | mask;
+  }
+}
 
 // Make a direct-map page table for the kernel.
 pagetable_t
@@ -62,6 +97,7 @@ void
 kvminit(void)
 {
   kernel_pagetable = kvmmake();
+  updaterefhistory();
 }
 
 // Switch h/w page table register to the kernel's page table,
@@ -76,19 +112,6 @@ kvminithart()
 
   // flush stale entries from the TLB.
   sfence_vma();
-}
-
-static void
-reglrupage(pte_t* pte)
-{
-  lrupages[ ( ((uint64)pte) >> 12 ) - ( KERNBASE >> 12 ) ].refbits = (char)0;
-  lrupages[ ( ((uint64)pte) >> 12 ) - ( KERNBASE >> 12 ) ].pte = pte;
-}
-
-static void
-unreglrupage(pte_t* pte)
-{
-  lrupages[ ( ((uint64)pte) >> 12 ) - ( KERNBASE >> 12 ) ].pte = 0;
 }
 
 // Return the address of the PTE in page table pagetable
