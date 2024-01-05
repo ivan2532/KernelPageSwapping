@@ -15,6 +15,13 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+struct lrupinfo {
+  char refbits;
+  pte_t *pte;
+};
+
+static struct lrupinfo lrupages[(PHYSTOP - KERNBASE) / PGSIZE] = {{0}};
+
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
@@ -69,6 +76,19 @@ kvminithart()
 
   // flush stale entries from the TLB.
   sfence_vma();
+}
+
+static void
+reglrupage(pte_t* pte)
+{
+  lrupages[ ( ((uint64)pte) >> 12 ) - ( KERNBASE >> 12 ) ].refbits = (char)0;
+  lrupages[ ( ((uint64)pte) >> 12 ) - ( KERNBASE >> 12 ) ].pte = pte;
+}
+
+static void
+unreglrupage(pte_t* pte)
+{
+  lrupages[ ( ((uint64)pte) >> 12 ) - ( KERNBASE >> 12 ) ].pte = 0;
 }
 
 // Return the address of the PTE in page table pagetable
@@ -157,6 +177,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
+    reglrupage(pte);
     if(a == last)
       break;
     a += PGSIZE;
@@ -185,6 +206,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
+      unreglrupage(pte);
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
@@ -344,6 +366,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
   if(pte == 0)
     panic("uvmclear");
   *pte &= ~PTE_U;
+  unreglrupage(pte);
 }
 
 // Copy from kernel to user.
