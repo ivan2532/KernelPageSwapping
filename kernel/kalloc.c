@@ -14,8 +14,14 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
-extern pte_t* getvictim();
-extern void* swapout(pte_t *pte);
+struct lrupinfo {
+  uchar refhistory;
+  pte_t *pte;
+  uint64 va;
+};
+
+extern struct lrupinfo getvictim();
+extern void* swapout(struct lrupinfo pinfo);
 
 struct run {
   struct run *next;
@@ -77,10 +83,10 @@ kalloc(void)
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;
-  else
-    return swapout(getvictim());
-
   release(&kmem.lock);
+
+  if(!r)
+    r = swapout(getvictim());
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk

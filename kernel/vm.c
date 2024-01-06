@@ -18,29 +18,39 @@ extern char trampoline[]; // trampoline.S
 struct lrupinfo {
   uchar refhistory;
   pte_t *pte;
+  uint64 va;
 };
 
 #define LRUPAGESSIZE ((PHYSTOP - KERNBASE) / PGSIZE)
 static struct lrupinfo lrupages[LRUPAGESSIZE] = {{0}};
 
 uint64
-getlruindex(pte_t *pte)
+getlruindex(uint64 va)
 {
-  return ( ((uint64)pte) >> 12 ) - ( KERNBASE >> 12 );
+  return va >> 12;
+}
+
+uint64
+getpaddress(pte_t *pte)
+{
+  uint64 ppn = ( (*pte) & 0x3FFFFFFFFFFFFL ) >> 10; // Extract bits 53-10 and shift to the right place
+  uint64 physical_address = ppn << 12; // Shift left by 12 bits to accommodate for the page offset
+  return physical_address;
 }
 
 void
-reglrupage(pte_t *pte)
+reglrupage(pte_t *pte, uint64 va)
 {
-  uint64 i = getlruindex(pte);
+  uint64 i = getlruindex(va);
   lrupages[i].refhistory = (uchar)0;
   lrupages[i].pte = pte;
+  lrupages[i].va = va;
 }
 
 void
-unreglrupage(pte_t *pte)
+unreglrupage(uint64 va)
 {
-  uint64 i = getlruindex(pte);
+  uint64 i = getlruindex(va);
   lrupages[i].pte = 0;
 }
 
@@ -60,19 +70,20 @@ updaterefhistory()
   }
 }
 
-pte_t*
+struct lrupinfo
 getvictim()
 {
   uint64 i;
   uchar minhistory = ~0;
-  pte_t *result = 0;
+  struct lrupinfo result = lrupages[0];
+  result.pte = 0;
 
   for(i = 0; i < LRUPAGESSIZE; i++)
   {
     if(lrupages[i].pte == 0) continue;
     if(lrupages[i].refhistory < minhistory)
     {
-      result = lrupages[i].pte;
+      result = lrupages[i];
       minhistory = lrupages[i].refhistory;
     }
   }
@@ -82,11 +93,18 @@ getvictim()
 
 // Returns free page
 void*
-swapout(pte_t *pte)
+swapout(struct lrupinfo pinfo)
 {
-  int blkn = (int)( ((uint64)pte) >> 12 );
-  uchar *data = (uchar*)( ((*pte) << 10) >> 20 );
-  write_block(blkn, data, 0);
+  uint64 lruindex = getlruindex(pinfo.va);
+  pte_t *pte = pinfo.pte;
+
+  int blkn = (int)lruindex*4;
+  uchar *data = (uchar*)getpaddress(pte);
+
+  for(int i = 0; i < 4; i++)
+  {
+    write_block(blkn + i, data + i*1024, 0);
+  }
 
   *pte &= ~PTE_V; // V = 0
   *pte |= PTE_ON_DISK; // ON_DISK = 1
@@ -96,17 +114,29 @@ swapout(pte_t *pte)
   return (void*)data;
 }
 
-void
-swapin(pte_t *pte)
+int
+swapin(uint64 va)
 {
-  int blkn = (int)( ((uint64)pte) >> 12 );
+  uint64 lruindex = getlruindex(va);
+  pte_t *pte = lrupages[lruindex].pte;
+
+  if((*pte & PTE_ON_DISK) == 0)
+    return 0;
+
+  int blkn = (int)lruindex*4;
   uchar *data = kalloc();
-  read_block(blkn, data, 0);
+
+  for(int i = 0; i < 4; i++)
+  {
+    read_block(blkn + i, data + i*1024, 0);
+  }
 
   *pte |= PTE_V; // V = 1
   *pte &= ~PTE_ON_DISK; // ON_DISK = 0
 
   sfence_vma(); // Flush TLB
+
+  return 1;
 }
 
 // Make a direct-map page table for the kernel.
@@ -190,7 +220,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
       pagetable = (pagetable_t)PTE2PA(*pte);
     }
     else if(*pte & PTE_ON_DISK) {
-      swapin(pte);
+      swapin(va);
       pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
@@ -218,7 +248,7 @@ walkaddr(pagetable_t pagetable, uint64 va)
   if(pte == 0)
     return 0;
   if((*pte & PTE_V) == 0 && (*pte & PTE_ON_DISK) != 0)
-    swapin(pte);
+    swapin(va);
   if((*pte & PTE_V) == 0)
     return 0;
   if((*pte & PTE_U) == 0)
@@ -258,7 +288,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
-    reglrupage(pte);
+    if(*pte & PTE_U)
+      reglrupage(pte, a);
     if(a == last)
       break;
     a += PGSIZE;
@@ -287,7 +318,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
-      unreglrupage(pte);
+      unreglrupage(a);
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
@@ -447,7 +478,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
   if(pte == 0)
     panic("uvmclear");
   *pte &= ~PTE_U;
-  unreglrupage(pte);
+  unreglrupage(va);
 }
 
 // Copy from kernel to user.

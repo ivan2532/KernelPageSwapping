@@ -20,7 +20,7 @@ void updaterefhistory();
 
 extern int devintr();
 
-extern void swapin(pte_t *pte);
+extern int swapin(uint64 va);
 
 void
 trapinit(void)
@@ -62,12 +62,8 @@ usertrap(void)
   if(scause == 13) {
     // page fault
 
-    pte_t* pte = (pte_t*)(r_stval());
-    if(*pte & PTE_ON_DISK)
-    {
-      swapin(pte);
-      pfhandled = 1;
-    }
+    uint64 va = (uint64)r_stval();
+    pfhandled = swapin(va);
   }
 
   if(pfhandled == 0)
