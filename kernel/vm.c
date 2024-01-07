@@ -201,7 +201,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
 
-    if(va != TRAMPOLINE && va != TRAPFRAME)
+    if((*pte & PTE_U) && va != TRAMPOLINE && va != TRAPFRAME)
       unreglrupage(a, pagetable);
 
     if(do_free){
