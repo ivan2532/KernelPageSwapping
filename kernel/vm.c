@@ -21,7 +21,7 @@ struct lrupinfo {
   uint64 va;
 };
 
-#define LRUPAGESSIZE ((PHYSTOP - KERNBASE) / PGSIZE)
+#define LRUPAGESSIZE ((PHYSTOP - KERNBASE) / PGSIZE)*2
 static struct lrupinfo lrupages[LRUPAGESSIZE] = {{0}};
 
 uint64
@@ -36,6 +36,14 @@ getpaddress(pte_t *pte)
   uint64 ppn = ( (*pte) & 0x3FFFFFFFFFFFFL ) >> 10; // Extract bits 53-10 and shift to the right place
   uint64 physical_address = ppn << 12; // Shift left by 12 bits to accommodate for the page offset
   return physical_address;
+}
+
+void
+setpaddress(pte_t *pte, uint64 new_ppn)
+{
+  uint64 masked_pte = *pte & ~0x3FFFFFFFFFFFFL;
+  uint64 new_ppn_shifted = (new_ppn << 10) & 0x3FFFFFFFFFFFFL;
+  *pte = masked_pte | new_ppn_shifted;
 }
 
 void
@@ -80,7 +88,10 @@ getvictim()
 
   for(i = 0; i < LRUPAGESSIZE; i++)
   {
-    if(lrupages[i].pte == 0) continue;
+    pte_t *pte = lrupages[i].pte;
+    if(pte == 0) continue;
+    if(*pte & PTE_ON_DISK) continue;
+
     if(lrupages[i].refhistory < minhistory)
     {
       result = lrupages[i];
@@ -95,17 +106,13 @@ getvictim()
 void*
 swapout(struct lrupinfo pinfo)
 {
-  uint64 lruindex = getlruindex(pinfo.va);
   pte_t *pte = pinfo.pte;
-
-  int blkn = (int)lruindex*4;
   uchar *data = (uchar*)getpaddress(pte);
+  int pageno = write_page(data);
+  if(pageno < 0)
+    return 0;
 
-  for(int i = 0; i < 4; i++)
-  {
-    write_block(blkn + i, data + i*1024, 0);
-  }
-
+  //setpaddress(pte, (uint64)pageno);
   *pte &= ~PTE_V; // V = 0
   *pte |= PTE_ON_DISK; // ON_DISK = 1
 
@@ -123,13 +130,8 @@ swapin(uint64 va)
   if((*pte & PTE_ON_DISK) == 0)
     return 0;
 
-  int blkn = (int)lruindex*4;
   uchar *data = kalloc();
-
-  for(int i = 0; i < 4; i++)
-  {
-    read_block(blkn + i, data + i*1024, 0);
-  }
+  read_page((int)getpaddress(pte), data);
 
   *pte |= PTE_V; // V = 1
   *pte &= ~PTE_ON_DISK; // ON_DISK = 0
@@ -285,7 +287,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V)
+    if(*pte & PTE_V || *pte & PTE_ON_DISK)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(*pte & PTE_U)
@@ -313,14 +315,17 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
+    if((*pte & PTE_V) == 0 && (*pte & PTE_ON_DISK) == 0)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
       unreglrupage(a);
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      if(*pte & PTE_ON_DISK)
+        deallocate_page((int)pa);
+      else
+        kfree((void*)pa);
     }
     *pte = 0;
   }

@@ -189,6 +189,9 @@ void            virtio_disk_rw(int id, struct buf *, int, int);
 void            virtio_disk_intr(int id);
 void            write_block(int blockno, uchar* data, int busy_wait);
 void            read_block(int blockno, uchar* data, int busy_wait);
+void            deallocate_page(int pageno);
+int             write_page(uchar* data);
+void            read_page(int pageno, uchar* data);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

@@ -19,6 +19,46 @@
 // the address of virtio mmio register r.
 #define R(offset,r) ((volatile uint32 *)(VIRTIO0 + VIRTIO_OFFSET * offset + (r)))
 
+#define LRUPAGESSIZE ((PHYSTOP - KERNBASE) / PGSIZE)*2
+#define BITS_PER_UINT (sizeof(uint32) * 8) // Assuming 32-bit unsigned int
+
+struct Bitset {
+  uint32 bits[LRUPAGESSIZE / BITS_PER_UINT];
+} diskbitset;
+
+void setBit(struct Bitset *bitset, int index) {
+  int arrayIndex = index / BITS_PER_UINT;
+  int bitOffset = index % BITS_PER_UINT;
+  bitset->bits[arrayIndex] |= (1 << bitOffset);
+}
+
+void clearBit(struct Bitset *bitset, int index) {
+  int arrayIndex = index / BITS_PER_UINT;
+  int bitOffset = index % BITS_PER_UINT;
+  bitset->bits[arrayIndex] &= ~(1 << bitOffset);
+}
+
+int getBit(struct Bitset *bitset, int index) {
+  int arrayIndex = index / BITS_PER_UINT;
+  int bitOffset = index % BITS_PER_UINT;
+  return (bitset->bits[arrayIndex] >> bitOffset) & 1;
+}
+
+int findFirstClearBit(struct Bitset *bitset) {
+  for (int i = 0; i < LRUPAGESSIZE; ++i) {
+    if (getBit(bitset, i) == 0) {
+      return i;
+    }
+  }
+  return -1; // Return -1 if no clear bit is found
+}
+
+int takeFirstClearBit(struct Bitset *bitset) {
+  int index = findFirstClearBit(bitset);
+  setBit(bitset, index);
+  return index;
+}
+
 static struct disk {
   // Name of the disk to be used with panic and spinlock
   char *name;
@@ -341,6 +381,32 @@ void read_block(int blockno, uchar data[BSIZE], int busy_wait) {
 
     virtio_disk_rw(VIRTIO1_ID, b, 0, busy_wait);
     memmove(data, b->data, BSIZE);
+}
+
+void deallocate_page(int pageno)
+{
+  clearBit(&diskbitset, pageno);
+}
+
+int write_page(uchar data[BSIZE*4]) {
+  int pageno = takeFirstClearBit(&diskbitset);
+  int blockno = pageno*4;
+  if(pageno >= LRUPAGESSIZE/2) return -1;
+
+  for(int i = 0; i < 4; i++)
+  {
+    write_block(blockno + i, data + i*1024, 0);
+  }
+
+  return pageno;
+}
+
+void read_page(int pageno, uchar data[BSIZE*4]){
+  for(int i = 0; i < 4; i++)
+  {
+    read_block(pageno*4 + i, data + i*1024, 0);
+  }
+  deallocate_page(pageno);
 }
 
 void
