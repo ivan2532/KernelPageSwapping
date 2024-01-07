@@ -176,6 +176,12 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+
+// swap.c
+int             ispteready(pte_t *pte);
+void            reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable);
+void            unreglrupage(uint64 va, pagetable_t pagetable);
+void            updaterefhistory();
 void*           swapout();
 int             swapin(uint64 va, pagetable_t pagetable);
 
