@@ -2007,12 +2007,9 @@ sbrkbasic(char *s)
     exit(1);
   }
   if(pid == 0){
-    printf("fork successful\n");
     a = sbrk(TOOMUCH);
-    printf("after sbrk\n");
     if(a == (char*)0xffffffffffffffffL){
       // it's OK if this fails.
-      printf("it's OK if this fails.\n");
       exit(0);
     }
 
@@ -2023,21 +2020,16 @@ sbrkbasic(char *s)
     // we should not get here! either sbrk(TOOMUCH)
     // should have failed, or (with lazy allocation)
     // a pagefault should have killed this process.
-    printf("we should not get here!\n");
     exit(1);
   }
 
-  printf("wait for xstatus\n");
   wait(&xstatus);
-  printf("wait for xstatus completed\n");
-
   if(xstatus == 1){
     printf("%s: too much memory allocated!\n", s);
     exit(1);
   }
 
   // can one sbrk() less than a page?
-  printf("can one sbrk() less than a page?\n");
   a = sbrk(0);
   for(i = 0; i < 5000; i++){
     b = sbrk(1);
