@@ -112,7 +112,7 @@ swapout(struct lrupinfo pinfo)
   if(pageno < 0)
     return 0;
 
-  //setpaddress(pte, (uint64)pageno);
+  setpaddress(pte, (uint64)pageno);
   *pte &= ~PTE_V; // V = 0
   *pte |= PTE_ON_DISK; // ON_DISK = 1
 
