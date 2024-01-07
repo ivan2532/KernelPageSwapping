@@ -176,6 +176,8 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+void*           swapout();
+int             swapin(uint64 va, pagetable_t pagetable);
 
 // plic.c
 void            plicinit(void);
@@ -190,8 +192,8 @@ void            virtio_disk_intr(int id);
 void            write_block(int blockno, uchar* data, int busy_wait);
 void            read_block(int blockno, uchar* data, int busy_wait);
 void            deallocate_page(int pageno);
-int             write_page(uchar* data);
-void            read_page(int pageno, uchar* data);
+int             write_page_to_disk(uchar data[4096]);
+void            take_page_from_disk(int diskpageno, uchar dest[4096]);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

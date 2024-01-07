@@ -20,8 +20,6 @@ void updaterefhistory();
 
 extern int devintr();
 
-extern int swapin(uint64 va);
-
 void
 trapinit(void)
 {
@@ -58,38 +56,34 @@ usertrap(void)
 
   uint64 scause = r_scause();
 
-  int pfhandled = 0;
   if(scause == 13) {
     // page fault
 
     uint64 va = (uint64)r_stval();
-    pfhandled = swapin(va);
-  }
-
-  if(pfhandled == 0)
-  {
-    if(scause == 8) {
-      // system call
-
-      if(killed(p))
-        exit(-1);
-
-      // sepc points to the ecall instruction,
-      // but we want to return to the next instruction.
-      p->trapframe->epc += 4;
-
-      // an interrupt will change sepc, scause, and sstatus,
-      // so enable only now that we're done with those registers.
-      intr_on();
-
-      syscall();
-    } else if((which_dev = devintr()) != 0){
-      // ok
-    } else {
-      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    int pfhandled = swapin(va, p->pagetable);
+    if(pfhandled == 0)
       setkilled(p);
-    }
+  } else if(scause == 8) {
+    // system call
+
+    if(killed(p))
+      exit(-1);
+
+    // sepc points to the ecall instruction,
+    // but we want to return to the next instruction.
+    p->trapframe->epc += 4;
+
+    // an interrupt will change sepc, scause, and sstatus,
+    // so enable only now that we're done with those registers.
+    intr_on();
+
+    syscall();
+  } else if((which_dev = devintr()) != 0){
+    // ok
+  } else {
+    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    setkilled(p);
   }
 
   if(killed(p))

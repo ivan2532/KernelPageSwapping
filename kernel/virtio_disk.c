@@ -19,43 +19,44 @@
 // the address of virtio mmio register r.
 #define R(offset,r) ((volatile uint32 *)(VIRTIO0 + VIRTIO_OFFSET * offset + (r)))
 
-#define LRUPAGESSIZE ((PHYSTOP - KERNBASE) / PGSIZE)*2
+#define DISK_PAGES_COUNT ((PHYSTOP - KERNBASE) / PGSIZE)
 #define BITS_PER_UINT (sizeof(uint32) * 8) // Assuming 32-bit unsigned int
 
-struct Bitset {
-  uint32 bits[LRUPAGESSIZE / BITS_PER_UINT];
-} diskbitset;
+static struct Bitset {
+  uint32 bits[DISK_PAGES_COUNT / BITS_PER_UINT];
+} diskpagesallocated = {{0} };
 
-void setBit(struct Bitset *bitset, int index) {
+void setBit(int index) {
   int arrayIndex = index / BITS_PER_UINT;
   int bitOffset = index % BITS_PER_UINT;
-  bitset->bits[arrayIndex] |= (1 << bitOffset);
+  diskpagesallocated.bits[arrayIndex] |= (1 << bitOffset);
 }
 
-void clearBit(struct Bitset *bitset, int index) {
+void clearBit(int index) {
   int arrayIndex = index / BITS_PER_UINT;
   int bitOffset = index % BITS_PER_UINT;
-  bitset->bits[arrayIndex] &= ~(1 << bitOffset);
+  diskpagesallocated.bits[arrayIndex] &= ~(1 << bitOffset);
 }
 
-int getBit(struct Bitset *bitset, int index) {
+int getBit(int index) {
   int arrayIndex = index / BITS_PER_UINT;
   int bitOffset = index % BITS_PER_UINT;
-  return (bitset->bits[arrayIndex] >> bitOffset) & 1;
+  return (diskpagesallocated.bits[arrayIndex] >> bitOffset) & 1;
 }
 
-int findFirstClearBit(struct Bitset *bitset) {
-  for (int i = 0; i < LRUPAGESSIZE; ++i) {
-    if (getBit(bitset, i) == 0) {
+int findFirstFreePage() {
+  for (int i = 0; i < DISK_PAGES_COUNT; ++i) {
+    if (getBit(i) == 0) {
       return i;
     }
   }
   return -1; // Return -1 if no clear bit is found
 }
 
-int takeFirstClearBit(struct Bitset *bitset) {
-  int index = findFirstClearBit(bitset);
-  setBit(bitset, index);
+int takeFirstFreePage() {
+  int index = findFirstFreePage();
+  if(index < 0) return -1;
+  setBit(index);
   return index;
 }
 
@@ -385,14 +386,14 @@ void read_block(int blockno, uchar data[BSIZE], int busy_wait) {
 
 void deallocate_page(int pageno)
 {
-  clearBit(&diskbitset, pageno);
+  clearBit(pageno);
 }
 
-int write_page(uchar data[BSIZE*4]) {
-  int pageno = takeFirstClearBit(&diskbitset);
-  int blockno = pageno*4;
-  if(pageno >= LRUPAGESSIZE/2) return -1;
+int write_page_to_disk(uchar data[4096]) {
+  int pageno = takeFirstFreePage();
+  if(pageno < 0) return -1;
 
+  int blockno = pageno*4;
   for(int i = 0; i < 4; i++)
   {
     write_block(blockno + i, data + i*1024, 0);
@@ -401,12 +402,13 @@ int write_page(uchar data[BSIZE*4]) {
   return pageno;
 }
 
-void read_page(int pageno, uchar data[BSIZE*4]){
+void take_page_from_disk(int diskpageno, uchar dest[4096]){
+  int blockno = diskpageno * 4;
   for(int i = 0; i < 4; i++)
   {
-    read_block(pageno*4 + i, data + i*1024, 0);
+    read_block(blockno + i, dest + i * 1024, 0);
   }
-  deallocate_page(pageno);
+  deallocate_page(diskpageno);
 }
 
 void

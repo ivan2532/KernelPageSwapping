@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
 
 /*
  * the kernel's page table.
@@ -19,15 +20,40 @@ struct lrupinfo {
   uchar refhistory;
   pte_t *pte;
   uint64 va;
+  pagetable_t pagetable;
 };
 
-#define LRUPAGESSIZE ((PHYSTOP - KERNBASE) / PGSIZE)*2
-static struct lrupinfo lrupages[LRUPAGESSIZE] = {{0}};
+#define RAM_PAGES_COUNT ( ((PHYSTOP - KERNBASE) / PGSIZE)*2 )
+static struct lrupinfo lrupages[RAM_PAGES_COUNT] = {{0} };
+struct spinlock lrupageslock;
 
-uint64
-getlruindex(uint64 va)
+struct lrupinfo*
+getfirstfreelrupage()
 {
-  return va >> 12;
+  for(uint64 i = 0; i < RAM_PAGES_COUNT; i++)
+  {
+    if(lrupages[i].pte == 0)
+    {
+      return &(lrupages[i]);
+    }
+  }
+
+  return 0;
+}
+
+struct lrupinfo*
+getpinfo(uint64 va, pagetable_t pagetable)
+{
+  for(uint64 i = 0; i < RAM_PAGES_COUNT; i++)
+  {
+    if(lrupages[i].pte == 0) continue;
+    if(lrupages[i].pagetable == pagetable && lrupages[i].va == va)
+    {
+      return &(lrupages[i]);
+    }
+  }
+
+  return 0;
 }
 
 uint64
@@ -47,54 +73,90 @@ setpaddress(pte_t *pte, uint64 new_ppn)
 }
 
 void
-reglrupage(pte_t *pte, uint64 va)
+reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
 {
-  uint64 i = getlruindex(va);
-  lrupages[i].refhistory = (uchar)0;
-  lrupages[i].pte = pte;
-  lrupages[i].va = va;
+  acquire(&lrupageslock);
+
+  struct lrupinfo* pinfo = getpinfo(va, pagetable);
+  if(pinfo == 0)
+  {
+    pinfo = getfirstfreelrupage();
+    if(pinfo == 0)
+    {
+      release(&lrupageslock);
+      panic("reglrupage: no more space in lrupages");
+    }
+
+    pinfo->va = va;
+    pinfo->pagetable = pagetable;
+  }
+  else // TODO: Does this ever happen?
+  {
+    release(&lrupageslock);
+    panic("getpinfo: edge case isreal");
+  }
+
+  pinfo->refhistory = 0;
+  pinfo->pte = pte;
+
+  release(&lrupageslock);
 }
 
 void
-unreglrupage(uint64 va)
+unreglrupage(uint64 va, pagetable_t pagetable)
 {
-  uint64 i = getlruindex(va);
-  lrupages[i].pte = 0;
+  acquire(&lrupageslock);
+
+  struct lrupinfo* pinfo = getpinfo(va, pagetable);
+  if(pinfo == 0)
+  {
+    release(&lrupageslock);
+    //panic("unreglrupage: not mapped");
+    return;
+  }
+
+  *pinfo = (struct lrupinfo){0};
+
+  release(&lrupageslock);
 }
 
 void
 updaterefhistory()
 {
+  acquire(&lrupageslock);
+
   uint64 i;
-  for(i = 0; i < LRUPAGESSIZE; i++)
-  {
-    if(lrupages[i].pte == 0) continue;
-
-    uchar a = ( *(lrupages[i].pte) & PTE_A ) == 0 ? 0 : 1;
-    *(lrupages[i].pte) = (*lrupages[i].pte) & (~PTE_A);
-
-    uchar mask = a << (sizeof(uchar) * 8 - 1);
-    lrupages[i].refhistory = (lrupages[i].refhistory >> 1) | mask;
-  }
-}
-
-struct lrupinfo
-getvictim()
-{
-  uint64 i;
-  uchar minhistory = ~0;
-  struct lrupinfo result = lrupages[0];
-  result.pte = 0;
-
-  for(i = 0; i < LRUPAGESSIZE; i++)
+  for(i = 0; i < RAM_PAGES_COUNT; i++)
   {
     pte_t *pte = lrupages[i].pte;
     if(pte == 0) continue;
     if(*pte & PTE_ON_DISK) continue;
 
+    uchar a = ( *pte & PTE_A ) == 0 ? 0 : 1;
+    *pte &= ~PTE_A; // A = 0
+
+    uchar mask = a << ( sizeof(uchar) * 8 - 1 );
+    lrupages[i].refhistory = (lrupages[i].refhistory >> 1) | mask;
+  }
+
+  release(&lrupageslock);
+}
+
+struct lrupinfo*
+getvictim()
+{
+  uchar minhistory = ~0;
+  struct lrupinfo *result = 0;
+
+  uint64 i;
+  for(i = 0; i < RAM_PAGES_COUNT; i++)
+  {
+    pte_t *pte = lrupages[i].pte;
+    if(pte == 0 || *pte & PTE_ON_DISK) continue;
+
     if(lrupages[i].refhistory < minhistory)
     {
-      result = lrupages[i];
+      result = &(lrupages[i]);
       minhistory = lrupages[i].refhistory;
     }
   }
@@ -102,42 +164,63 @@ getvictim()
   return result;
 }
 
-// Returns free page
+// Returns free page, 0 if there is none
 void*
-swapout(struct lrupinfo pinfo)
+swapout()
 {
-  pte_t *pte = pinfo.pte;
+  acquire(&lrupageslock);
+
+  struct lrupinfo *pinfo = getvictim();
+  if(pinfo == 0)
+    panic("swapout: no victim!");
+
+  pte_t *pte = pinfo->pte;
   uchar *data = (uchar*)getpaddress(pte);
-  int pageno = write_page(data);
-  if(pageno < 0)
+  *pte |= PTE_PENDING_DISK_OPERATION; // PTE_PENDING_DISK_OPERATION = 1
+  release(&lrupageslock);
+
+  int diskpageno = write_page_to_disk(data);
+  if(diskpageno < 0)
     return 0;
 
-  setpaddress(pte, (uint64)pageno);
+  acquire(&lrupageslock);
+
+  setpaddress(pte, (uint64)diskpageno);
   *pte &= ~PTE_V; // V = 0
   *pte |= PTE_ON_DISK; // ON_DISK = 1
+  *pte &= ~PTE_PENDING_DISK_OPERATION; // PTE_PENDING_DISK_OPERATION = 0
+  pinfo->refhistory = 0;
 
   sfence_vma(); // Flush TLB
 
+  release(&lrupageslock);
   return (void*)data;
 }
 
 int
-swapin(uint64 va)
+swapin(uint64 va, pagetable_t pagetable)
 {
-  uint64 lruindex = getlruindex(va);
-  pte_t *pte = lrupages[lruindex].pte;
+  acquire(&lrupageslock);
 
+  pte_t *pte = getpinfo(va, pagetable)->pte;
   if((*pte & PTE_ON_DISK) == 0)
     return 0;
 
-  uchar *data = kalloc();
-  read_page((int)getpaddress(pte), data);
+  uchar *rampage = kalloc();
+  if(rampage == 0)
+    return 0;
 
+  int diskpageno = (int) getpaddress(pte);
+  // TODO: spinlock?
+  take_page_from_disk(diskpageno, rampage);
+
+  setpaddress(pte, (uint64)rampage);
   *pte |= PTE_V; // V = 1
   *pte &= ~PTE_ON_DISK; // ON_DISK = 0
 
   sfence_vma(); // Flush TLB
 
+  release(&lrupageslock);
   return 1;
 }
 
@@ -222,7 +305,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
       pagetable = (pagetable_t)PTE2PA(*pte);
     }
     else if(*pte & PTE_ON_DISK) {
-      swapin(va);
+      swapin(va, pagetable);
       pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
@@ -250,11 +333,12 @@ walkaddr(pagetable_t pagetable, uint64 va)
   if(pte == 0)
     return 0;
   if((*pte & PTE_V) == 0 && (*pte & PTE_ON_DISK) != 0)
-    swapin(va);
+    swapin(va, pagetable);
   if((*pte & PTE_V) == 0)
     return 0;
   if((*pte & PTE_U) == 0)
     return 0;
+
   pa = PTE2PA(*pte);
   return pa;
 }
@@ -291,7 +375,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(*pte & PTE_U)
-      reglrupage(pte, a);
+      reglrupage(pte, a, pagetable);
     if(a == last)
       break;
     a += PGSIZE;
@@ -319,8 +403,11 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
+
+    if(va != TRAMPOLINE && va != TRAPFRAME)
+      unreglrupage(a, pagetable);
+
     if(do_free){
-      unreglrupage(a);
       uint64 pa = PTE2PA(*pte);
       if(*pte & PTE_ON_DISK)
         deallocate_page((int)pa);
@@ -483,7 +570,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
   if(pte == 0)
     panic("uvmclear");
   *pte &= ~PTE_U;
-  unreglrupage(va);
+  unreglrupage(va, pagetable);
 }
 
 // Copy from kernel to user.
