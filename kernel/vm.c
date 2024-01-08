@@ -15,6 +15,8 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+void unmappages(pagetable_t pagetable, uint64 startva, uint64 endva);
+
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
@@ -193,15 +195,11 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
 
     if(ispteswappable(pagetable, a, pte))
-      unreglrupage(a, pagetable);
+      unreglrupage(pte, a, pagetable);
 
-    if(do_free){
-      uint64 pa = PTE2PA(*pte);
-      if(*pte & PTE_ON_DISK)
-        deallocate_page((int)pa);
-      else
-        kfree((void*)pa);
-    }
+    if(do_free && (*pte & PTE_V))
+      kfree((void*)PTE2PA(*pte));
+
     *pte = 0;
   }
 }
@@ -362,7 +360,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
     panic("uvmclear");
 
   if(ispteswappable(pagetable, va, pte))
-    unreglrupage(va, pagetable);
+    unreglrupage(pte, va, pagetable);
 
   *pte &= ~PTE_U;
 }

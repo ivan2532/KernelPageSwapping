@@ -184,7 +184,7 @@ void            enableyield(struct spinlock *lock1, struct spinlock *lock2);
 void            disableyield(struct spinlock *lock1, struct spinlock *lock2);
 int             ispteswappable(pagetable_t pagetable, uint64 va, pte_t *pte);
 void            reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable);
-void            unreglrupage(uint64 va, pagetable_t pagetable);
+void            unreglrupage(pte_t *pte, uint64 va, pagetable_t pagetable);
 void            updaterefhistory();
 void*           swapout();
 int             swapin(uint64 va, pagetable_t pagetable);

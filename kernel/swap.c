@@ -138,7 +138,7 @@ reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
 }
 
 void
-unreglrupage(uint64 va, pagetable_t pagetable)
+unreglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
 {
   int nestedcall = yielddisabled;
   disableyield(0, 0);
@@ -153,6 +153,8 @@ unreglrupage(uint64 va, pagetable_t pagetable)
   }
 
   *pinfo = (struct lrupinfo){0};
+  if(*pte & PTE_ON_DISK)
+    deallocate_page((int)PTE2PA(*pte));
 
   if(!nestedcall)
     enableyield(0, 0);
