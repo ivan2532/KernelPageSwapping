@@ -63,6 +63,7 @@ ispteswappable(pagetable_t pagetable, uint64 va, pte_t *pte)
           && (uint64*)PTE2PA(*pte) != pagetable
           && *pte & PTE_U
           && !(*pte & PTE_G)
+          && !(*pte & PTE_X)
           && va_aligned != TRAMPOLINE
           && va_aligned != TRAPFRAME;
 }
