@@ -6,6 +6,11 @@
 *.ko
 *.obj
 *.elf
+*.asm
+*.sym
+
+# User make file results
+user/_*
 
 # Linker output
 *.ilk
@@ -50,3 +55,23 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+kernel/kernel
+
+kernel/kernel.asm
+
+kernel/kernel.sym
+
+swap.img
+
+.gdbinit
+
+user/initcode
+
+user/initcode.asm
+
+mkfs/mkfs
+
+fs.img
+
+user/usys.S
