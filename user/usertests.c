@@ -906,10 +906,7 @@ void
 reparent(char *s)
 {
   int master_pid = getpid();
-  printf("master_pid: %d\n", master_pid);
-
   for(int i = 0; i < 200; i++){
-    //printf("forking: %d, %d\n", master_pid, i);
     int pid = fork();
     if(pid < 0){
       printf("%s: fork failed\n", s);

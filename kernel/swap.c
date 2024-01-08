@@ -154,7 +154,7 @@ unreglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
 
   *pinfo = (struct lrupinfo){0};
   if(*pte & PTE_ON_DISK)
-    deallocate_page((int)PTE2PA(*pte));
+    deallocate_page(PTE2DPN(*pte));
 
   if(!nestedcall)
     enableyield(0, 0);
@@ -268,8 +268,7 @@ swapin(uint64 va, pagetable_t pagetable)
     return 0;
   }
 
-  int diskpageno = (int) (PTE2PA(*pte) >> 12);
-  take_page_from_disk(diskpageno, rampage);
+  take_page_from_disk(PTE2DPN(*pte), rampage);
 
   setpaddress(pte, (uint64)rampage);
   *pte |= PTE_V; // V = 1
