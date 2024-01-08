@@ -139,7 +139,7 @@ fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
 
 ifndef MEM
-MEM := 1M
+MEM := 16M
 endif
 
 swap.img:

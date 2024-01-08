@@ -47,32 +47,25 @@ struct lrupinfo {
 
 static struct lrupinfo lrupages[RAM_PAGES_COUNT] = {{0} };
 
-uint64
-getpaddress(pte_t *pte)
-{
-  uint64 ppn = ( (*pte) & 0x3FFFFFFFFFFFFL ) >> 10; // Extract bits 53-10 and shift to the right place
-  uint64 physical_address = ppn << 12; // Shift left by 12 bits to accommodate for the page offset
-  return physical_address;
-}
-
 void
-setpaddress(pte_t *pte, uint64 new_ppn)
+setpaddress(pte_t *pte, uint64 pa)
 {
-  uint64 masked_pte = *pte & ~0x3FFFFFFFFFFFFL;
-  uint64 new_ppn_shifted = (new_ppn << 10) & 0x3FFFFFFFFFFFFL;
-  *pte = masked_pte | new_ppn_shifted;
+  uint64 upper = (*pte >> 54) << 54;
+  uint64 lower = (*pte << 54) >> 54;
+  *pte = upper | PA2PTE(pa) | lower;
 }
 
 int
 ispteswappable(pagetable_t pagetable, uint64 va, pte_t *pte)
 {
+  uint64 va_aligned = PGROUNDDOWN(va);
   return  pagetable != kernel_pagetable
-          && (uint64*)getpaddress(pte) != pagetable
+          && (uint64*)PTE2PA(*pte) != pagetable
           && *pte & PTE_U
           && !(*pte & PTE_G)
           && !(*pte & PTE_X)
-          && va != TRAMPOLINE
-          && va != TRAPFRAME;
+          && va_aligned != TRAMPOLINE
+          && va_aligned != TRAPFRAME;
 }
 
 struct lrupinfo*
@@ -92,10 +85,11 @@ getfirstfreelrupage()
 struct lrupinfo*
 getpinfo(uint64 va, pagetable_t pagetable)
 {
+  uint64 va_aligned = PGROUNDDOWN(va);
   for(uint64 i = 0; i < RAM_PAGES_COUNT; i++)
   {
     if(lrupages[i].pte == 0) continue;
-    if(lrupages[i].pagetable == pagetable && lrupages[i].va == va)
+    if(lrupages[i].pagetable == pagetable && lrupages[i].va == va_aligned)
     {
       return &(lrupages[i]);
     }
@@ -107,6 +101,9 @@ getpinfo(uint64 va, pagetable_t pagetable)
 void
 reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
 {
+  if(pte == 0)
+    panic("reglrupage: pte is 0");
+
   int nestedcall = yielddisabled;
   disableyield(0, 0);
 
@@ -122,7 +119,7 @@ reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
       panic("reglrupage: no more space in lrupages");
     }
 
-    pinfo->va = va;
+    pinfo->va = PGROUNDDOWN(va);
     pinfo->pagetable = pagetable;
   }
   else // TODO: Does this ever happen?
@@ -213,7 +210,7 @@ swapout()
     panic("swapout: no victim!");
 
   pte_t *pte = pinfo->pte;
-  uchar *data = (uchar*)getpaddress(pte);
+  uchar *data = (uchar*)PTE2PA(*pte);
 
   int diskpageno = write_page_to_disk(data);
   if(diskpageno < 0)
@@ -224,7 +221,7 @@ swapout()
     return 0;
   }
 
-  setpaddress(pte, (uint64)diskpageno);
+  setpaddress(pte, ((uint64)diskpageno) << 12);
   *pte &= ~PTE_V; // V = 0
   *pte |= PTE_ON_DISK; // ON_DISK = 1
   pinfo->refhistory = 0;
@@ -242,9 +239,23 @@ swapin(uint64 va, pagetable_t pagetable)
   int nestedcall = yielddisabled;
   disableyield(0, 0);
 
-  pte_t *pte = getpinfo(va, pagetable)->pte;
-  if((*pte & PTE_ON_DISK) == 0)
+  struct lrupinfo *pinfo = getpinfo(va, pagetable);
+  if(pinfo == 0)
+  {
+    if(!nestedcall)
+      enableyield(0, 0);
+
     return 0;
+  }
+
+  pte_t *pte = pinfo->pte;
+  if((*pte & PTE_ON_DISK) == 0)
+  {
+    if(!nestedcall)
+      enableyield(0, 0);
+
+    return 0;
+  }
 
   uchar *rampage = kalloc();
   if(rampage == 0)
@@ -255,7 +266,7 @@ swapin(uint64 va, pagetable_t pagetable)
     return 0;
   }
 
-  int diskpageno = (int) getpaddress(pte);
+  int diskpageno = (int) (PTE2PA(*pte) >> 12);
   take_page_from_disk(diskpageno, rampage);
 
   setpaddress(pte, (uint64)rampage);

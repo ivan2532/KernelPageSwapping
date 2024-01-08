@@ -26,37 +26,37 @@ static struct Bitset {
   uint32 bits[DISK_PAGES_COUNT / BITS_PER_UINT];
 } diskpagesallocated = {{0} };
 
-void setBit(int index) {
+void setbit(int index) {
   int arrayIndex = index / BITS_PER_UINT;
   int bitOffset = index % BITS_PER_UINT;
   diskpagesallocated.bits[arrayIndex] |= (1 << bitOffset);
 }
 
-void clearBit(int index) {
+void clearbit(int index) {
   int arrayIndex = index / BITS_PER_UINT;
   int bitOffset = index % BITS_PER_UINT;
   diskpagesallocated.bits[arrayIndex] &= ~(1 << bitOffset);
 }
 
-int getBit(int index) {
+int getbit(int index) {
   int arrayIndex = index / BITS_PER_UINT;
   int bitOffset = index % BITS_PER_UINT;
   return (diskpagesallocated.bits[arrayIndex] >> bitOffset) & 1;
 }
 
-int findFirstFreePage() {
+int findfirstfreepage() {
   for (int i = 0; i < DISK_PAGES_COUNT; ++i) {
-    if (getBit(i) == 0) {
+    if (getbit(i) == 0) {
       return i;
     }
   }
   return -1; // Return -1 if no clear bit is found
 }
 
-int takeFirstFreePage() {
-  int index = findFirstFreePage();
+int takefirstfreepage() {
+  int index = findfirstfreepage();
   if(index < 0) return -1;
-  setBit(index);
+  setbit(index);
   return index;
 }
 
@@ -386,11 +386,11 @@ void read_block(int blockno, uchar data[BSIZE], int busy_wait) {
 
 void deallocate_page(int pageno)
 {
-  clearBit(pageno);
+  clearbit(pageno);
 }
 
 int write_page_to_disk(uchar data[4096]) {
-  int pageno = takeFirstFreePage();
+  int pageno = takefirstfreepage();
   if(pageno < 0) return -1;
 
   int blockno = pageno*4;

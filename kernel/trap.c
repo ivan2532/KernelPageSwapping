@@ -54,7 +54,7 @@ usertrap(void)
 
   uint64 scause = r_scause();
 
-  if(scause == 13) {
+  if(scause == 12 || scause == 13 || scause == 15) {
     // page fault
 
     uint64 va = (uint64)r_stval();
@@ -79,7 +79,7 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    printf("usertrap(): unexpected scause %p, scauseIvan %p pid=%d\n", r_scause(), scause, p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);
   }
