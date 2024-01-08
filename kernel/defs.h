@@ -179,6 +179,7 @@ int             copyinstr(pagetable_t, char *, uint64, uint64);
 
 // swap.c
 int             ispteready(pte_t *pte);
+int             ispteswappable(pagetable_t pagetable, uint64 va, pte_t *pte);
 void            reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable);
 void            unreglrupage(uint64 va, pagetable_t pagetable);
 void            updaterefhistory();

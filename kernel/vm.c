@@ -105,13 +105,13 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
 
   pte_t *result = &pagetable[PX(0, va)];
 
-  if(*result & PTE_ON_DISK)
-  {
-    if(*result & PTE_PENDING_DISK_OPERATION) // TODO: Help @ZikaBG
-      panic("walk: PENDING_DISK_OPERATION");
-
-    swapin(va, pagetable);
-  }
+//  if(*result & PTE_ON_DISK)
+//  {
+//    if(*result & PTE_PENDING_DISK_OPERATION) // TODO: Help @ZikaBG
+//      panic("walk: PENDING_DISK_OPERATION");
+//
+//    swapin(va, pagetable);
+//  }
 
   return result;
 }
@@ -171,7 +171,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
-    if(*pte & PTE_U)
+    if(ispteswappable(pagetable, a, pte))
       reglrupage(pte, a, pagetable);
     if(a == last)
       break;
@@ -196,12 +196,12 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0 && (*pte & PTE_ON_DISK) == 0)
+    if(!(*pte & PTE_V) && !(*pte & PTE_ON_DISK))
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
 
-    if((*pte & PTE_U) && va != TRAMPOLINE && va != TRAPFRAME)
+    if(ispteswappable(pagetable, a, pte))
       unreglrupage(a, pagetable);
 
     if(do_free){
@@ -367,7 +367,9 @@ uvmclear(pagetable_t pagetable, uint64 va)
   if(pte == 0)
     panic("uvmclear");
   *pte &= ~PTE_U;
-  unreglrupage(va, pagetable);
+
+  if(ispteswappable(pagetable, va, pte))
+    unreglrupage(va, pagetable);
 }
 
 // Copy from kernel to user.

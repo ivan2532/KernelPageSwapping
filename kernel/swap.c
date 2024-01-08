@@ -6,6 +6,8 @@
 
 #define RAM_PAGES_COUNT ( ((PHYSTOP - KERNBASE) / PGSIZE)*2 )
 
+extern pagetable_t kernel_pagetable;
+
 struct lrupinfo {
   uchar refhistory;
   pte_t *pte;
@@ -16,9 +18,37 @@ struct lrupinfo {
 static struct lrupinfo lrupages[RAM_PAGES_COUNT] = {{0} };
 struct spinlock lrupageslock;
 
-int ispteready(pte_t *pte)
+uint64
+getpaddress(pte_t *pte)
+{
+  uint64 ppn = ( (*pte) & 0x3FFFFFFFFFFFFL ) >> 10; // Extract bits 53-10 and shift to the right place
+  uint64 physical_address = ppn << 12; // Shift left by 12 bits to accommodate for the page offset
+  return physical_address;
+}
+
+void
+setpaddress(pte_t *pte, uint64 new_ppn)
+{
+  uint64 masked_pte = *pte & ~0x3FFFFFFFFFFFFL;
+  uint64 new_ppn_shifted = (new_ppn << 10) & 0x3FFFFFFFFFFFFL;
+  *pte = masked_pte | new_ppn_shifted;
+}
+
+int
+ispteready(pte_t *pte)
 {
   return (*pte & PTE_V) && !(*pte & PTE_PENDING_DISK_OPERATION);
+}
+
+int
+ispteswappable(pagetable_t pagetable, uint64 va, pte_t *pte)
+{
+  return  pagetable != kernel_pagetable
+          && (uint64*)getpaddress(pte) != pagetable
+          && *pte & PTE_U
+          && !(*pte & PTE_X)
+          && va != TRAMPOLINE
+          && va != TRAPFRAME;
 }
 
 struct lrupinfo*
@@ -48,22 +78,6 @@ getpinfo(uint64 va, pagetable_t pagetable)
   }
 
   return 0;
-}
-
-uint64
-getpaddress(pte_t *pte)
-{
-  uint64 ppn = ( (*pte) & 0x3FFFFFFFFFFFFL ) >> 10; // Extract bits 53-10 and shift to the right place
-  uint64 physical_address = ppn << 12; // Shift left by 12 bits to accommodate for the page offset
-  return physical_address;
-}
-
-void
-setpaddress(pte_t *pte, uint64 new_ppn)
-{
-  uint64 masked_pte = *pte & ~0x3FFFFFFFFFFFFL;
-  uint64 new_ppn_shifted = (new_ppn << 10) & 0x3FFFFFFFFFFFFL;
-  *pte = masked_pte | new_ppn_shifted;
 }
 
 void
