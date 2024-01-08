@@ -8,7 +8,7 @@
 
 extern pagetable_t kernel_pagetable;
 
-int yielddisabled = 0;
+volatile int yielddisabled = 0;
 
 struct lrupinfo {
   uchar refhistory;
@@ -18,7 +18,6 @@ struct lrupinfo {
 };
 
 static struct lrupinfo lrupages[RAM_PAGES_COUNT] = {{0} };
-struct spinlock lrupageslock;
 
 uint64
 getpaddress(pte_t *pte)
@@ -85,7 +84,7 @@ getpinfo(uint64 va, pagetable_t pagetable)
 void
 reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
 {
-  acquire(&lrupageslock);
+  yielddisabled++;
 
   struct lrupinfo* pinfo = getpinfo(va, pagetable);
   if(pinfo == 0)
@@ -93,7 +92,7 @@ reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
     pinfo = getfirstfreelrupage();
     if(pinfo == 0)
     {
-      release(&lrupageslock);
+      yielddisabled--;
       panic("reglrupage: no more space in lrupages");
     }
 
@@ -102,37 +101,37 @@ reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
   }
   else // TODO: Does this ever happen?
   {
-    release(&lrupageslock);
+    yielddisabled--;
     panic("getpinfo: edge case isreal");
   }
 
   pinfo->refhistory = 0;
   pinfo->pte = pte;
 
-  release(&lrupageslock);
+  yielddisabled--;
 }
 
 void
 unreglrupage(uint64 va, pagetable_t pagetable)
 {
-  acquire(&lrupageslock);
+  yielddisabled++;
 
   struct lrupinfo* pinfo = getpinfo(va, pagetable);
   if(pinfo == 0)
   {
-    release(&lrupageslock);
+    yielddisabled--;
     panic("unreglrupage: not mapped");
   }
 
   *pinfo = (struct lrupinfo){0};
 
-  release(&lrupageslock);
+  yielddisabled--;
 }
 
 void
 updaterefhistory()
 {
-  acquire(&lrupageslock);
+  yielddisabled++;
 
   uint64 i;
   for(i = 0; i < RAM_PAGES_COUNT; i++)
@@ -148,7 +147,7 @@ updaterefhistory()
     lrupages[i].refhistory = (lrupages[i].refhistory >> 1) | mask;
   }
 
-  release(&lrupageslock);
+  yielddisabled--;
 }
 
 struct lrupinfo*
@@ -177,7 +176,7 @@ getvictim()
 void*
 swapout()
 {
-  acquire(&lrupageslock);
+  yielddisabled++;
 
   struct lrupinfo *pinfo = getvictim();
   if(pinfo == 0)
@@ -185,53 +184,48 @@ swapout()
 
   pte_t *pte = pinfo->pte;
   uchar *data = (uchar*)getpaddress(pte);
-  *pte |= PTE_PENDING_DISK_OPERATION; // PTE_PENDING_DISK_OPERATION = 1
-  release(&lrupageslock);
 
   int diskpageno = write_page_to_disk(data);
   if(diskpageno < 0)
+  {
+    yielddisabled--;
     return 0;
-
-  acquire(&lrupageslock);
+  }
 
   setpaddress(pte, (uint64)diskpageno);
   *pte &= ~PTE_V; // V = 0
   *pte |= PTE_ON_DISK; // ON_DISK = 1
-  *pte &= ~PTE_PENDING_DISK_OPERATION; // PTE_PENDING_DISK_OPERATION = 0
   pinfo->refhistory = 0;
   sfence_vma(); // Flush TLB
 
-  release(&lrupageslock);
+  yielddisabled--;
   return (void*)data;
 }
 
 int
 swapin(uint64 va, pagetable_t pagetable)
 {
-  acquire(&lrupageslock);
+  yielddisabled++;
 
   pte_t *pte = getpinfo(va, pagetable)->pte;
   if((*pte & PTE_ON_DISK) == 0)
     return 0;
-  *pte |= PTE_PENDING_DISK_OPERATION; // PENDING_DISK_OPERATION = 1
-
-  release(&lrupageslock);
 
   uchar *rampage = kalloc();
   if(rampage == 0)
+  {
+    yielddisabled--;
     return 0;
+  }
 
   int diskpageno = (int) getpaddress(pte);
   take_page_from_disk(diskpageno, rampage);
 
-  acquire(&lrupageslock);
-
   setpaddress(pte, (uint64)rampage);
   *pte |= PTE_V; // V = 1
   *pte &= ~PTE_ON_DISK; // ON_DISK = 0
-  *pte &= ~PTE_PENDING_DISK_OPERATION; // PENDING_DISK_OPERATION = 0
   sfence_vma(); // Flush TLB
 
-  release(&lrupageslock);
+  yielddisabled--;
   return 1;
 }

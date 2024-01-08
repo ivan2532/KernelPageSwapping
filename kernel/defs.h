@@ -11,7 +11,7 @@ struct sleeplock;
 struct stat;
 struct superblock;
 
-extern int yielddisabled;
+extern volatile int yielddisabled;
 
 // bio.c
 void            binit(void);
