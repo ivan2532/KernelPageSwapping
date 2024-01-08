@@ -8,6 +8,8 @@
 
 extern pagetable_t kernel_pagetable;
 
+int yielddisabled = 0;
+
 struct lrupinfo {
   uchar refhistory;
   pte_t *pte;

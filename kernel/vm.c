@@ -103,17 +103,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     }
   }
 
-  pte_t *result = &pagetable[PX(0, va)];
-
-//  if(*result & PTE_ON_DISK)
-//  {
-//    if(*result & PTE_PENDING_DISK_OPERATION) // TODO: Help @ZikaBG
-//      panic("walk: PENDING_DISK_OPERATION");
-//
-//    swapin(va, pagetable);
-//  }
-
-  return result;
+  return &pagetable[PX(0, va)];
 }
 
 // Look up a virtual address, return the physical address,
@@ -131,7 +121,11 @@ walkaddr(pagetable_t pagetable, uint64 va)
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
-  if((*pte & PTE_V) == 0 && (*pte & PTE_ON_DISK) == 0)
+  if(*pte & PTE_PENDING_DISK_OPERATION)
+    return 0;
+  if(!(*pte & PTE_V) && (*pte & PTE_ON_DISK))
+    swapin(va, pagetable);
+  if((*pte & PTE_V) == 0)
     return 0;
   if((*pte & PTE_U) == 0)
     return 0;
@@ -337,6 +331,8 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
+    if((*pte & PTE_ON_DISK) && !(*pte & PTE_PENDING_DISK_OPERATION))
+      swapin(i, old);
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
@@ -349,6 +345,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       goto err;
     }
   }
+
   return 0;
 
  err:

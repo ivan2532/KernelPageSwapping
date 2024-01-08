@@ -288,12 +288,19 @@ fork(void)
     return -1;
   }
 
+  yielddisabled = 1;
+  release(&np->lock);
+
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
-    release(&np->lock);
+    yielddisabled = 0;
     return -1;
   }
+
+  acquire(&np->lock);
+  yielddisabled = 0;
+
   np->sz = p->sz;
 
   // copy saved user registers.
@@ -502,6 +509,9 @@ sched(void)
 void
 yield(void)
 {
+  if(yielddisabled)
+    return;
+
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
