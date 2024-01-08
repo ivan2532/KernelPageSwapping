@@ -148,31 +148,28 @@ kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, int perm)
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
+  uint64 a, last;
   pte_t *pte;
 
   if(size == 0)
     panic("mappages: size");
-
-  for(uint64 a = PGROUNDDOWN(va); a <= PGROUNDDOWN(va + size - 1); a += PGSIZE, pa += PGSIZE){
-    if((pte = walk(pagetable, a, 1)) == 0){
-      unmappages(pagetable, va, a);
+  
+  a = PGROUNDDOWN(va);
+  last = PGROUNDDOWN(va + size - 1);
+  for(;;){
+    if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    }
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(ispteswappable(pagetable, a, pte))
       reglrupage(pte, a, pagetable);
+    if(a == last)
+      break;
+    a += PGSIZE;
+    pa += PGSIZE;
   }
   return 0;
-}
-
-void unmappages(pagetable_t pagetable, uint64 startva, uint64 endva) {
-  for(uint64 i = PGROUNDDOWN(startva); i < endva; i += PGSIZE) {
-    pte_t *ptetofree = walk(pagetable, i, 0);
-    if(ispteswappable(pagetable, i, ptetofree))
-      unreglrupage(ptetofree, i, pagetable);
-  }
 }
 
 // Remove npages of mappings starting from va. va must be
