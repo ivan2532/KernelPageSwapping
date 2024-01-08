@@ -10,6 +10,34 @@ extern pagetable_t kernel_pagetable;
 
 volatile int yielddisabled = 0;
 
+void
+enableyield(struct spinlock *lock1, struct spinlock *lock2)
+{
+  if(!yielddisabled)
+    return;
+
+  if(lock1 != 0)
+    acquire(lock1);
+  if(lock2 != 0)
+    acquire(lock2);
+
+  yielddisabled = 0;
+}
+
+void
+disableyield(struct spinlock *lock1, struct spinlock *lock2)
+{
+  if(yielddisabled)
+    return;
+
+  yielddisabled = 1;
+
+  if(lock2 != 0)
+    release(lock2);
+  if(lock1 != 0)
+    release(lock1);
+}
+
 struct lrupinfo {
   uchar refhistory;
   pte_t *pte;
@@ -36,17 +64,12 @@ setpaddress(pte_t *pte, uint64 new_ppn)
 }
 
 int
-ispteready(pte_t *pte)
-{
-  return (*pte & PTE_V) && !(*pte & PTE_PENDING_DISK_OPERATION);
-}
-
-int
 ispteswappable(pagetable_t pagetable, uint64 va, pte_t *pte)
 {
   return  pagetable != kernel_pagetable
           && (uint64*)getpaddress(pte) != pagetable
           && *pte & PTE_U
+          && !(*pte & PTE_G)
           && !(*pte & PTE_X)
           && va != TRAMPOLINE
           && va != TRAPFRAME;
@@ -84,7 +107,8 @@ getpinfo(uint64 va, pagetable_t pagetable)
 void
 reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
 {
-  yielddisabled++;
+  int nestedcall = yielddisabled;
+  disableyield(0, 0);
 
   struct lrupinfo* pinfo = getpinfo(va, pagetable);
   if(pinfo == 0)
@@ -92,7 +116,9 @@ reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
     pinfo = getfirstfreelrupage();
     if(pinfo == 0)
     {
-      yielddisabled--;
+      if(!nestedcall)
+        enableyield(0, 0);
+
       panic("reglrupage: no more space in lrupages");
     }
 
@@ -101,38 +127,43 @@ reglrupage(pte_t *pte, uint64 va, pagetable_t pagetable)
   }
   else // TODO: Does this ever happen?
   {
-    yielddisabled--;
+    if(!nestedcall)
+      enableyield(0, 0);
+
     panic("getpinfo: edge case isreal");
   }
 
   pinfo->refhistory = 0;
   pinfo->pte = pte;
 
-  yielddisabled--;
+  if(!nestedcall)
+    enableyield(0, 0);
 }
 
 void
 unreglrupage(uint64 va, pagetable_t pagetable)
 {
-  yielddisabled++;
+  int nestedcall = yielddisabled;
+  disableyield(0, 0);
 
   struct lrupinfo* pinfo = getpinfo(va, pagetable);
   if(pinfo == 0)
   {
-    yielddisabled--;
+    if(!nestedcall)
+      enableyield(0, 0);
+
     panic("unreglrupage: not mapped");
   }
 
   *pinfo = (struct lrupinfo){0};
 
-  yielddisabled--;
+  if(!nestedcall)
+    enableyield(0, 0);
 }
 
 void
 updaterefhistory()
 {
-  yielddisabled++;
-
   uint64 i;
   for(i = 0; i < RAM_PAGES_COUNT; i++)
   {
@@ -146,8 +177,6 @@ updaterefhistory()
     uchar mask = a << ( sizeof(uchar) * 8 - 1 );
     lrupages[i].refhistory = (lrupages[i].refhistory >> 1) | mask;
   }
-
-  yielddisabled--;
 }
 
 struct lrupinfo*
@@ -162,7 +191,7 @@ getvictim()
     pte_t *pte = lrupages[i].pte;
     if(pte == 0) continue;
 
-    if(ispteready(pte) && lrupages[i].refhistory < minhistory)
+    if((*pte & PTE_V) && lrupages[i].refhistory < minhistory)
     {
       result = &(lrupages[i]);
       minhistory = lrupages[i].refhistory;
@@ -176,7 +205,8 @@ getvictim()
 void*
 swapout()
 {
-  yielddisabled++;
+  int nestedcall = yielddisabled;
+  disableyield(0, 0);
 
   struct lrupinfo *pinfo = getvictim();
   if(pinfo == 0)
@@ -188,7 +218,9 @@ swapout()
   int diskpageno = write_page_to_disk(data);
   if(diskpageno < 0)
   {
-    yielddisabled--;
+    if(!nestedcall)
+      enableyield(0, 0);
+
     return 0;
   }
 
@@ -198,14 +230,17 @@ swapout()
   pinfo->refhistory = 0;
   sfence_vma(); // Flush TLB
 
-  yielddisabled--;
+  if(!nestedcall)
+    enableyield(0, 0);
+
   return (void*)data;
 }
 
 int
 swapin(uint64 va, pagetable_t pagetable)
 {
-  yielddisabled++;
+  int nestedcall = yielddisabled;
+  disableyield(0, 0);
 
   pte_t *pte = getpinfo(va, pagetable)->pte;
   if((*pte & PTE_ON_DISK) == 0)
@@ -214,7 +249,9 @@ swapin(uint64 va, pagetable_t pagetable)
   uchar *rampage = kalloc();
   if(rampage == 0)
   {
-    yielddisabled--;
+    if(!nestedcall)
+      enableyield(0, 0);
+
     return 0;
   }
 
@@ -226,6 +263,8 @@ swapin(uint64 va, pagetable_t pagetable)
   *pte &= ~PTE_ON_DISK; // ON_DISK = 0
   sfence_vma(); // Flush TLB
 
-  yielddisabled--;
+  if(!nestedcall)
+    enableyield(0, 0);
+
   return 1;
 }

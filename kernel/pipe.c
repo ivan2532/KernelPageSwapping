@@ -90,8 +90,14 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
       sleep(&pi->nwrite, &pi->lock);
     } else {
       char ch;
-      if(copyin(pr->pagetable, &ch, addr + i, 1) == -1)
+
+      disableyield(&pi->lock, 0);
+      int copyresult = copyin(pr->pagetable, &ch, addr + i, 1);
+      enableyield(&pi->lock, 0);
+
+      if(copyresult == -1)
         break;
+
       pi->data[pi->nwrite++ % PIPESIZE] = ch;
       i++;
     }
@@ -121,7 +127,12 @@ piperead(struct pipe *pi, uint64 addr, int n)
     if(pi->nread == pi->nwrite)
       break;
     ch = pi->data[pi->nread++ % PIPESIZE];
-    if(copyout(pr->pagetable, addr + i, &ch, 1) == -1)
+
+    disableyield(&pi->lock, 0);
+    int copyresult = copyout(pr->pagetable, addr + i, &ch, 1);
+    enableyield(&pi->lock, 0);
+
+    if(copyresult == -1)
       break;
   }
   wakeup(&pi->nwrite);  //DOC: piperead-wakeup

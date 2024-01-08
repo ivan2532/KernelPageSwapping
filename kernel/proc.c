@@ -288,18 +288,15 @@ fork(void)
     return -1;
   }
 
-  yielddisabled = 1;
-  release(&np->lock);
+  disableyield(&np->lock, 0);
+  int copyresult = uvmcopy(p->pagetable, np->pagetable, p->sz); // Copy user memory from parent to child.
+  enableyield(&np->lock, 0);
 
-  // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if(copyresult < 0){
     freeproc(np);
-    yielddisabled = 0;
+    release(&np->lock);
     return -1;
   }
-
-  acquire(&np->lock);
-  yielddisabled = 0;
 
   np->sz = p->sz;
 
@@ -415,12 +412,21 @@ wait(uint64 addr)
         if(pp->state == ZOMBIE){
           // Found one.
           pid = pp->pid;
-          if(addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate,
-                                  sizeof(pp->xstate)) < 0) {
-            release(&pp->lock);
-            release(&wait_lock);
-            return -1;
+
+          if(addr != 0)
+          {
+            disableyield(&wait_lock, &pp->lock);
+            int copyresult = copyout(p->pagetable, addr, (char *)&pp->xstate, sizeof(pp->xstate));
+            enableyield(&wait_lock, &pp->lock);
+
+            if(copyresult < 0)
+            {
+              release(&pp->lock);
+              release(&wait_lock);
+              return -1;
+            }
           }
+
           freeproc(pp);
           release(&pp->lock);
           release(&wait_lock);

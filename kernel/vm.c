@@ -55,7 +55,6 @@ void
 kvminit(void)
 {
   kernel_pagetable = kvmmake();
-  updaterefhistory();
 }
 
 // Switch h/w page table register to the kernel's page table,
@@ -94,15 +93,13 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
-    }
-    else {
+    } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
-
   return &pagetable[PX(0, va)];
 }
 
@@ -120,8 +117,6 @@ walkaddr(pagetable_t pagetable, uint64 va)
 
   pte = walk(pagetable, va, 0);
   if(pte == 0)
-    return 0;
-  if(*pte & PTE_PENDING_DISK_OPERATION)
     return 0;
   if(!(*pte & PTE_V) && (*pte & PTE_ON_DISK))
     swapin(va, pagetable);
@@ -190,6 +185,8 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
+    if((*pte & PTE_V) && (*pte & PTE_ON_DISK))
+      panic("uvmunmap: invalid pte, both V and ON_DISK");
     if(!(*pte & PTE_V) && !(*pte & PTE_ON_DISK))
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
@@ -331,7 +328,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_ON_DISK) && !(*pte & PTE_PENDING_DISK_OPERATION))
+    if(*pte & PTE_ON_DISK)
       swapin(i, old);
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
@@ -363,10 +360,11 @@ uvmclear(pagetable_t pagetable, uint64 va)
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
-  *pte &= ~PTE_U;
 
   if(ispteswappable(pagetable, va, pte))
     unreglrupage(va, pagetable);
+
+  *pte &= ~PTE_U;
 }
 
 // Copy from kernel to user.
